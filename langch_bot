@@ -1,0 +1,74 @@
+# Import libraries
+import os
+import pickle
+from dotenv import load_dotenv, find_dotenv
+from sentence_transformers import util, SentenceTransformer
+import telebot
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+# Loading environment variables
+load_dotenv(find_dotenv())
+
+API_TOKEN = '8005272373:AAH5yLsNORtPTtP_-Vqeg7dHnXfqapu1EOc'  # Replace with your bot token
+BASE_URL = os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1")
+API_KEY = os.getenv("API_KEY", "meta-llama-3.1-8b-instruct")
+
+# Initialize the ChatOpenAI object
+llm = ChatOpenAI(base_url=BASE_URL, api_key=API_KEY)
+
+# Load the SentenceTransformer model
+semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Load the vector space data
+def load_vector_space(file_path='vector_space.pkl'):
+    with open(file_path, 'rb') as f:
+        sentences, sentence_embeddings = pickle.load(f)
+    return sentences, sentence_embeddings
+
+# Find relevant sentences based on the user's question
+def find_relevant_sections(question, sentences, sentence_embeddings):
+    question_embedding = semantic_model.encode(question, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(question_embedding, sentence_embeddings)
+    relevant_sentences = sorted(zip(sentences, scores[0]), key=lambda x: x[1], reverse=True)
+    return relevant_sentences
+
+# Create the prompt for the language model
+def create_prompt(question, vector_space_file='vector_space.pkl'):
+    sentences, sentence_embeddings = load_vector_space(vector_space_file)
+    relevant_sentences = find_relevant_sections(question, sentences, sentence_embeddings)[:5]
+    context = " ".join([sent[0] for sent in relevant_sentences])
+    return f"Текст: {context}\n\nВопрос: {question}\nОтвет:"
+
+# Send the prompt to the language model and get the response
+def send_prompt_to_model(prompt):
+    response = llm.chat.completions.create(
+        model="model-identifier",  # Put your model identifier here
+        messages=[{"role": "user", "content": prompt}]
+    )
+    if response.choices:
+        return response.choices[0].message.content
+    else:
+        return "Ошибка: нет ответа от модели."
+
+# Set up your Telegram bot
+bot = telebot.TeleBot(API_TOKEN)
+
+# Start command handler
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "Привет! Задайте свой вопрос, и я постараюсь найти ответ.")
+
+# Message handler for user input
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    question = message.text
+    prompt = create_prompt(question, vector_space_file='C:/Users/fff/Desktop/NN/vector_space.pkl')  # Specify your file path
+    answer = send_prompt_to_model(prompt)
+    bot.reply_to(message, answer)
+
+
+# Start polling
+print("Бот запущен...")
+bot.polling()
